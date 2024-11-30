@@ -1,0 +1,42 @@
+# Rust build directory
+/target/
+
+# Cargo lock file (uncomment this if this is a library)
+# Cargo.lock
+
+# Audio files
+*.mp3
+*.m4a
+*.flac
+*.ogg
+*.opus
+*.aiff
+*.au
+*.wav
+
+# Environment files
+.env
+.env.local
+.env.*
+
+# Windows specific
+Thumbs.db
+Desktop.ini
+
+# IDE specific
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Debug symbols
+*.pdb
+
+# Windows MSVC debug information
+*.ilk
+*.exp
+
+# Rust profiling and debugging
+*.profraw
+flamegraph.svg
+perf.*
