@@ -1,18 +1,30 @@
 use anyhow::{Context, Result};
 use ebur128::{EbuR128, Mode};
-use lame::Lame;
 use log::debug;
 use mp3lame_encoder::{Bitrate, Builder, DualPcm, FlushNoGap, Quality};
-use std::fs::File;
-use std::io::Write;
-use std::path::Path;
-use symphonia::core::codecs::DecoderOptions;
-use symphonia::core::formats::FormatOptions;
-use symphonia::core::formats::Track;
-use symphonia::core::io::MediaSourceStream;
-use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;
+use std::{
+    fs::File,
+    io::Write,
+    path::{Path, PathBuf},
+    process::Command,
+    thread,
+    time::Duration,
+};
+use symphonia::{
+    core::{
+        formats::{FormatOptions, Track},
+        io::MediaSourceStream,
+        meta::MetadataOptions,
+        probe::Hint,
+    },
+    default,
+};
 
+// Constants
+const I16_RANGE: (f32, f32) = (-32768.0, 32767.0);
+const FILE_WRITE_DELAY: Duration = Duration::from_millis(100);
+
+#[derive(Debug)]
 pub struct AudioNormalizer {
     target_loudness: f64,
     peak_ceiling: f64,
@@ -26,27 +38,113 @@ impl AudioNormalizer {
         }
     }
 
-    pub fn normalize_file(&self, input_path: &Path) -> Result<()> {
-        // Read and decode the audio file
-        let (samples, track) = self.read_audio_file(input_path)?;
+    pub fn normalize_file(&self, input_path: &Path) -> Result<PathBuf> {
+        let working_path = self.prepare_working_file(input_path)?;
 
-        // Calculate and apply normalization
-        let normalized_samples = self.normalize_samples(&samples, &track)?;
+        // Read and process audio
+        let (samples, track) = self.process_audio_stream(&working_path)?;
+        let gain = self.calculate_normalization_gain(&track, &samples)?;
+        let normalized_samples = self.apply_gain(&samples, gain)?;
 
-        // Write the normalized audio
-        self.write_normalized_audio(input_path, &normalized_samples, track)?;
+        // Write normalized audio
+        let output_path = self.create_output_path(input_path);
+        self.write_mp3(&output_path, &normalized_samples, track)?;
 
-        Ok(())
+        // Cleanup temporary files
+        if working_path != input_path {
+            std::fs::remove_file(working_path)?;
+        }
+
+        Ok(output_path)
     }
 
-    fn read_audio_file(&self, input_path: &Path) -> Result<(Vec<f32>, Track)> {
-        let (mut format, track) = self.probe_audio_format(input_path)?;
-        let track_id = track.id;
+    fn prepare_working_file(&self, input_path: &Path) -> Result<PathBuf> {
+        if !self.is_opus_file(input_path) {
+            return Ok(input_path.to_path_buf());
+        }
 
-        let decoder = self.create_decoder(&track)?;
-        let samples = self.decode_to_samples(&mut format, track_id, decoder)?;
+        let temp_mp3 = input_path.with_extension("mp3");
+        AudioConverter::convert_opus_to_mp3(input_path, &temp_mp3)?;
+        thread::sleep(FILE_WRITE_DELAY);
 
-        Ok((samples, track))
+        if !temp_mp3.exists() {
+            return Err(anyhow::anyhow!(
+                "Working file not found at: {}",
+                temp_mp3.display()
+            ));
+        }
+
+        Ok(temp_mp3)
+    }
+
+    fn is_opus_file(&self, path: &Path) -> bool {
+        path.extension().map_or(false, |ext| ext == "ogg")
+    }
+
+    fn create_output_path(&self, input_path: &Path) -> PathBuf {
+        input_path.with_file_name(format!(
+            "{}-normalized.mp3",
+            input_path.file_stem().unwrap().to_string_lossy()
+        ))
+    }
+
+    fn calculate_normalization_gain(&self, track: &Track, samples: &[f32]) -> Result<f64> {
+        let channels = track.codec_params.channels.unwrap().count();
+        let sample_rate = track.codec_params.sample_rate.unwrap();
+        self.measure_loudness(channels, sample_rate, samples)
+    }
+
+    fn apply_gain(&self, samples: &[f32], gain: f64) -> Result<Vec<f32>> {
+        // Apply peak ceiling limit to gain
+        let peak_gain = 10f64.powf(self.peak_ceiling / 20.0);
+        let final_gain = gain.min(peak_gain);
+
+        // Apply normalization with peak ceiling
+        let normalized_samples = samples
+            .iter()
+            .map(|&s| (s as f64 * final_gain) as f32)
+            .collect();
+
+        Ok(normalized_samples)
+    }
+
+    fn measure_loudness(&self, channels: usize, sample_rate: u32, samples: &[f32]) -> Result<f64> {
+        let mut ebu = EbuR128::new(channels as u32, sample_rate, Mode::I | Mode::TRUE_PEAK)
+            .context("Failed to create EBU R128 analyzer")?;
+
+        ebu.add_frames_f32(samples)
+            .context("Failed to analyze audio samples")?;
+
+        let current_loudness = ebu
+            .loudness_global()
+            .context("Failed to calculate global loudness")?;
+
+        if !current_loudness.is_finite() {
+            return Err(anyhow::anyhow!("Invalid loudness value calculated"));
+        }
+
+        let gain_adjustment = if current_loudness < self.target_loudness {
+            // Current is quieter than target, increase gain
+            debug!(
+                "Current loudness {:.1} LUFS is quieter than target {:.1} LUFS, increasing gain",
+                current_loudness, self.target_loudness
+            );
+            self.target_loudness - current_loudness
+        } else {
+            // Current is louder than target, decrease gain
+            debug!(
+                "Current loudness {:.1} LUFS is louder than target {:.1} LUFS, decreasing gain",
+                current_loudness, self.target_loudness
+            );
+            self.target_loudness - current_loudness
+        };
+
+        let linear_gain = 10f64.powf(gain_adjustment / 20.0);
+        if !linear_gain.is_finite() {
+            return Err(anyhow::anyhow!("Invalid gain value calculated"));
+        }
+
+        Ok(linear_gain)
     }
 
     fn decode_to_samples(
@@ -97,154 +195,6 @@ impl AudioNormalizer {
         Ok(samples)
     }
 
-    fn probe_audio_format(
-        &self,
-        input_path: &Path,
-    ) -> Result<(Box<dyn symphonia::core::formats::FormatReader>, Track)> {
-        let file = File::open(input_path).context("Failed to open audio file")?;
-        let mss = MediaSourceStream::new(Box::new(file), Default::default());
-
-        let mut hint = Hint::new();
-        if let Some(extension) = input_path.extension() {
-            hint.with_extension(extension.to_str().unwrap_or(""));
-        }
-
-        let format_opts: FormatOptions = Default::default();
-        let metadata_opts: MetadataOptions = Default::default();
-
-        let probed = symphonia::default::get_probe()
-            .format(&hint, mss, &format_opts, &metadata_opts)
-            .context("Failed to probe audio format")?;
-
-        let format = probed.format;
-        let track = format
-            .default_track()
-            .context("No default track found")?
-            .clone();
-
-        Ok((format, track))
-    }
-
-    fn create_decoder(&self, track: &Track) -> Result<Box<dyn symphonia::core::codecs::Decoder>> {
-        symphonia::default::get_codecs()
-            .make(&track.codec_params, &DecoderOptions::default())
-            .context("Failed to create decoder")
-    }
-
-    fn normalize_samples(&self, samples: &[f32], track: &Track) -> Result<Vec<f32>> {
-        let channels = track.codec_params.channels.unwrap().count();
-        let sample_rate = track.codec_params.sample_rate.unwrap();
-
-        let samples_i16: Vec<i16> = samples.iter().map(|&x| (x * 32767.0) as i16).collect();
-
-        // Calculate normalization gain
-        let gain = self.calculate_normalization_gain(channels, sample_rate, &samples_i16)?;
-
-        // Apply peak ceiling limit to gain
-        let peak_gain = 10f64.powf(self.peak_ceiling / 20.0);
-        let final_gain = gain.min(peak_gain);
-
-        // Apply normalization with peak ceiling
-        let normalized_samples = samples
-            .iter()
-            .map(|&s| (s as f64 * final_gain) as f32)
-            .collect();
-
-        Ok(normalized_samples)
-    }
-
-    fn calculate_normalization_gain(
-        &self,
-        channels: usize,
-        sample_rate: u32,
-        samples: &[i16],
-    ) -> Result<f64> {
-        let mut ebu = EbuR128::new(channels as u32, sample_rate, Mode::I | Mode::TRUE_PEAK)?;
-
-        ebu.add_frames_i16(samples)?;
-
-        let current_loudness = ebu.loudness_global()?;
-        let gain_adjustment = self.target_loudness - current_loudness;
-        let linear_gain = 10f64.powf(gain_adjustment / 20.0);
-
-        debug!(
-            "Current loudness: {:.1} LUFS, applying {:.1} dB gain adjustment",
-            current_loudness, gain_adjustment
-        );
-
-        Ok(linear_gain)
-    }
-
-    fn write_normalized_audio(
-        &self,
-        input_path: &Path,
-        normalized_samples: &[f32],
-        track: Track,
-    ) -> Result<()> {
-        let extension = input_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("wav");
-
-        let output_path = input_path.with_file_name(format!(
-            "{}-normalized.{}",
-            input_path.file_stem().unwrap().to_string_lossy(),
-            extension
-        ));
-
-        match extension.to_lowercase().as_str() {
-            "wav" => self.write_wav(
-                &output_path,
-                normalized_samples,
-                track.codec_params.channels.unwrap().count(),
-                track.codec_params.sample_rate.unwrap(),
-            ),
-            "mp3" => self.write_mp3(&output_path, normalized_samples, track),
-            _ => {
-                // For non-WAV/MP3 formats, we'll use the WAV format as a fallback
-                debug!(
-                    "Format {} not directly supported, falling back to WAV",
-                    extension
-                );
-                self.write_wav(
-                    &output_path.with_extension("wav"),
-                    normalized_samples,
-                    track.codec_params.channels.unwrap().count(),
-                    track.codec_params.sample_rate.unwrap(),
-                )
-            }
-        }
-    }
-
-    fn write_wav(
-        &self,
-        output_path: &Path,
-        normalized_samples: &[f32],
-        channels: usize,
-        sample_rate: u32,
-    ) -> Result<()> {
-        let spec = hound::WavSpec {
-            channels: channels as u16,
-            sample_rate,
-            bits_per_sample: 32,
-            sample_format: hound::SampleFormat::Float,
-        };
-
-        let mut writer =
-            hound::WavWriter::create(output_path, spec).context("Failed to create output file")?;
-
-        for &sample in normalized_samples {
-            writer
-                .write_sample(sample)
-                .context("Failed to write sample")?;
-        }
-
-        writer.finalize().context("Failed to finalize WAV file")?;
-        debug!("Wrote normalized audio to: {}", output_path.display());
-
-        Ok(())
-    }
-
     fn write_mp3(
         &self,
         output_path: &Path,
@@ -256,17 +206,17 @@ impl AudioNormalizer {
 
         // Create and configure MP3 encoder
         let mut encoder = Builder::new().context("Failed to create LAME builder")?;
-        encoder.set_num_channels(channels as u8);
-        encoder.set_sample_rate(sample_rate);
-        encoder.set_brate(Bitrate::Kbps192);
-        encoder.set_quality(Quality::Good);
+        let _ = encoder.set_num_channels(channels as u8);
+        let _ = encoder.set_sample_rate(sample_rate);
+        let _ = encoder.set_brate(Bitrate::Kbps192);
+        let _ = encoder.set_quality(Quality::Good);
 
         let mut encoder = encoder.build().unwrap();
 
         // Convert f32 samples to i16 and split into channels
         let samples_i16: Vec<i16> = normalized_samples
             .iter()
-            .map(|&x| (x * 32767.0).clamp(-32768.0, 32767.0) as i16)
+            .map(|&x| (x * I16_RANGE.1).clamp(I16_RANGE.0, I16_RANGE.1) as i16)
             .collect();
 
         // Split samples into left and right channels
@@ -285,7 +235,8 @@ impl AudioNormalizer {
 
         let mut output_file =
             File::create(output_path).context("Failed to create output MP3 file")?;
-        let mut mp3_buffer = vec![std::mem::MaybeUninit::uninit(); mp3lame_encoder::max_required_buffer_size(1024)];
+        let mut mp3_buffer =
+            vec![std::mem::MaybeUninit::uninit(); mp3lame_encoder::max_required_buffer_size(1024)];
 
         // Encode chunks
         let chunk_size = 1024; // Process 1024 samples at a time
@@ -296,7 +247,7 @@ impl AudioNormalizer {
             };
 
             let encoded = encoder.encode(input, &mut mp3_buffer).unwrap();
-            output_file.write_all(unsafe { 
+            output_file.write_all(unsafe {
                 std::slice::from_raw_parts(mp3_buffer.as_ptr() as *const u8, encoded)
             })?;
         }
@@ -310,50 +261,84 @@ impl AudioNormalizer {
         debug!("Wrote normalized MP3 to: {}", output_path.display());
         Ok(())
     }
+
+    fn process_audio_stream(&self, input_path: &Path) -> Result<(Vec<f32>, Track)> {
+        // First get the track info
+        let file = File::open(input_path)?;
+        let mss = MediaSourceStream::new(Box::new(file), Default::default());
+
+        let probe = default::get_probe();
+        let format_opts: FormatOptions = Default::default();
+        let metadata_opts: MetadataOptions = Default::default();
+        let hint = Hint::new();
+
+        let probed = probe.format(&hint, mss, &format_opts, &metadata_opts)?;
+        let mut format_reader = probed.format;
+        let track = format_reader
+            .default_track()
+            .context("No default track found")?
+            .clone();
+
+        // Get decoder
+        let decoder =
+            symphonia::default::get_codecs().make(&track.codec_params, &Default::default())?;
+
+        // Decode samples
+        let samples = self.decode_to_samples(&mut format_reader, track.id, decoder)?;
+
+        Ok((samples, track))
+    }
+}
+
+pub struct AudioConverter;
+
+impl AudioConverter {
+    pub fn convert_opus_to_mp3(input_path: &Path, output_path: &Path) -> Result<()> {
+        debug!(
+            "Converting Opus to MP3: {} -> {}",
+            input_path.display(),
+            output_path.display()
+        );
+
+        let status = Command::new("ffmpeg")
+            .args([
+                "-i",
+                &input_path.to_string_lossy(),
+                "-c:a",
+                "libmp3lame",
+                "-q:a",
+                "2",
+                "-y",
+                &output_path.to_string_lossy(),
+                "-loglevel",
+                "quiet", // Suppress ffmpeg output
+            ])
+            .status()
+            .context("Failed to execute ffmpeg")?;
+
+        if !status.success() {
+            return Err(anyhow::anyhow!("ffmpeg conversion failed"));
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
 
     #[test]
-    fn test_calculate_normalization_gain() {
+    fn test_process_audio_stream() -> Result<()> {
         let normalizer = AudioNormalizer::new(-14.0, -1.0);
-        let test_samples: Vec<i16> = vec![0, 16384, -16384, 32767, -32767];
-        let result = normalizer.calculate_normalization_gain(1, 44100, &test_samples);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_read_audio_file() -> Result<()> {
-        let normalizer = AudioNormalizer::new(-14.0, -1.0);
-        let temp_dir = tempdir()?;
-
-        // Create a test WAV file
-        let wav_path = temp_dir.path().join("test.wav");
-        let spec = hound::WavSpec {
-            channels: 1,
-            sample_rate: 44100,
-            bits_per_sample: 32,
-            sample_format: hound::SampleFormat::Float,
-        };
-        {
-            let mut writer = hound::WavWriter::create(&wav_path, spec)?;
-            // Write a simple sine wave
-            for t in (0..44100).map(|x| x as f32 / 44100.0) {
-                let sample = (t * 440.0 * 2.0 * std::f32::consts::PI).sin();
-                writer.write_sample(sample)?;
-            }
-            writer.finalize()?;
-        }
+        let wav_path = Path::new("./samples/test.wav");
 
         // Test WAV file reading
-        let (samples, track) = normalizer.read_audio_file(&wav_path)?;
+        let (samples, track) = normalizer.process_audio_stream(&wav_path)?;
 
         assert!(!samples.is_empty(), "WAV samples should not be empty");
         assert_eq!(track.codec_params.sample_rate.unwrap(), 44100);
-        assert_eq!(track.codec_params.channels.unwrap().count(), 1);
+        assert!(track.codec_params.channels.unwrap().count() > 0);
 
         Ok(())
     }
@@ -362,49 +347,22 @@ mod tests {
     fn test_normalization_gain_achieves_target() -> Result<()> {
         let target_loudness = -14.0;
         let normalizer = AudioNormalizer::new(target_loudness, -1.0);
-        let temp_dir = tempdir()?;
+        let wav_path = Path::new("./samples/test.wav");
 
-        // Create a test WAV file with known amplitude
-        let wav_path = temp_dir.path().join("test.wav");
-        let channels = 1;
-        let sample_rate = 44100;
-        let spec = hound::WavSpec {
-            channels: channels as u16,
-            sample_rate,
-            bits_per_sample: 16,
-            sample_format: hound::SampleFormat::Int,
-        };
-
-        // Generate a 1-second sine wave at high amplitude
-        let samples_i16: Vec<i16> = (0..sample_rate)
-            .map(|x| {
-                let t = x as f32 / sample_rate as f32;
-                let sample = (t * 440.0 * 2.0 * std::f32::consts::PI).sin();
-                // Use 80% of maximum amplitude
-                (sample * 0.8 * i16::MAX as f32) as i16
-            })
-            .collect();
-
-        {
-            let mut writer = hound::WavWriter::create(&wav_path, spec)?;
-            for &sample in &samples_i16 {
-                writer.write_sample(sample)?;
-            }
-            writer.finalize()?;
-        }
+        // Read the test file
+        let (samples, track) = normalizer.process_audio_stream(wav_path)?;
+        let channels = track.codec_params.channels.unwrap().count();
+        let sample_rate = track.codec_params.sample_rate.unwrap();
 
         // Calculate the gain
-        let gain = normalizer.calculate_normalization_gain(channels, sample_rate, &samples_i16)?;
+        let gain = normalizer.measure_loudness(channels, sample_rate, &samples)?;
 
         // Apply the gain to get normalized samples
-        let normalized_samples: Vec<i16> = samples_i16
-            .iter()
-            .map(|&s| (s as f64 * gain).clamp(-32768.0, 32767.0) as i16)
-            .collect();
+        let normalized_samples = normalizer.apply_gain(&samples, gain)?;
 
         // Measure the loudness of normalized samples
         let mut ebu = EbuR128::new(channels as u32, sample_rate, Mode::I | Mode::TRUE_PEAK)?;
-        ebu.add_frames_i16(&normalized_samples)?;
+        ebu.add_frames_f32(&normalized_samples)?;
         let final_loudness = ebu.loudness_global()?;
 
         // Assert that the final loudness is within 0.1 LUFS of target
@@ -433,26 +391,23 @@ mod tests {
 
         println!("Reading test file from: {}", wav_path.display());
 
-        let (mut format, track) = normalizer.probe_audio_format(&wav_path)?;
+        let (samples, track) = normalizer.process_audio_stream(wav_path)?;
         println!(
             "Track info: channels={}, sample_rate={}",
             track.codec_params.channels.unwrap().count(),
             track.codec_params.sample_rate.unwrap()
         );
 
-        let decoder = normalizer.create_decoder(&track)?;
-        let decoded_samples = normalizer.decode_to_samples(&mut format, track.id, decoder)?;
+        println!("Decoded samples count: {}", samples.len());
 
-        println!("Decoded samples count: {}", decoded_samples.len());
-
-        if decoded_samples.is_empty() {
+        if samples.is_empty() {
             return Err(anyhow::anyhow!(
                 "No samples were decoded from the test file"
             ));
         }
 
         // Check sample ranges
-        for (i, &sample) in decoded_samples.iter().enumerate() {
+        for (i, &sample) in samples.iter().enumerate() {
             if !(sample >= -1.0 && sample <= 1.0) {
                 return Err(anyhow::anyhow!(
                     "Sample {} is outside valid range: {}",
@@ -463,13 +418,88 @@ mod tests {
         }
 
         // Basic sanity checks
+        assert!(samples.len() > 0, "Should have decoded some samples");
         assert!(
-            decoded_samples.len() > 0,
-            "Should have decoded some samples"
+            samples.iter().any(|&x| x != 0.0),
+            "Samples should not all be zero"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_opus_processing() -> Result<()> {
+        let normalizer = AudioNormalizer::new(-14.0, -1.0);
+        let opus_path = Path::new("./samples/test.opus");
+
+        // Add file existence check
+        if !opus_path.exists() {
+            return Ok(()); // Skip test if file doesn't exist
+                           // Or alternatively:
+                           // return Err(anyhow::anyhow!("Test file not found: {}", opus_path.display()));
+        }
+
+        // Test Opus file reading
+        let (samples, track) = normalizer.process_audio_stream(&opus_path)?;
+
+        // Add more detailed assertions and debug output
+        println!("Decoded {} samples", samples.len());
+        println!("Sample rate: {}", track.codec_params.sample_rate.unwrap());
+        println!("Channels: {}", track.codec_params.channels.unwrap().count());
+
+        assert!(!samples.is_empty(), "Opus samples should not be empty");
+        assert_eq!(
+            track.codec_params.sample_rate.unwrap(),
+            48000,
+            "Opus files should be 48kHz"
         );
         assert!(
-            decoded_samples.iter().any(|&x| x != 0.0),
-            "Samples should not all be zero"
+            track.codec_params.channels.unwrap().count() <= 2,
+            "Should be mono or stereo"
+        );
+
+        // Validate sample values
+        assert!(
+            samples.iter().any(|&x| x != 0.0),
+            "All samples are zero - likely decoding issue"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_convert_opus_to_mp3() -> Result<()> {
+        use std::io::Read;
+
+        let test_opus = Path::new("./samples/test.ogg");
+
+        // Skip test if sample file doesn't exist
+        if !test_opus.exists() {
+            println!("Skipping test_convert_opus_to_mp3 - test.ogg not found");
+            return Ok(());
+        }
+
+        // Create a temporary output path
+        let temp_dir = tempfile::tempdir()?;
+        let output_path = temp_dir.path().join("output-test.mp3");
+
+        // Convert to MP3
+        AudioConverter::convert_opus_to_mp3(test_opus, &output_path)?;
+
+        // Verify the output file exists and has content
+        assert!(output_path.exists(), "Output MP3 file should exist");
+
+        let mut mp3_file = File::open(&output_path)?;
+        let mut mp3_content = Vec::new();
+        mp3_file.read_to_end(&mut mp3_content)?;
+
+        // Basic MP3 validation - check for MP3 header magic numbers
+        assert!(mp3_content.len() > 4, "MP3 file should have content");
+        assert!(
+            mp3_content
+                .windows(2)
+                .any(|window| window == [0xFF, 0xFB] || window == [0xFF, 0xFA]),
+            "MP3 file should contain valid MP3 frame headers"
         );
 
         Ok(())

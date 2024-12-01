@@ -1,20 +1,26 @@
 use anyhow::Result;
-use log::{info, warn};
+use log::{debug, info, warn};
 use reqwest::{
     header::{HeaderMap, HeaderValue, AUTHORIZATION},
     Client as ReqwestClient,
 };
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 use tokio::fs;
 
 use crate::audio::AudioNormalizer;
 
 #[derive(Debug, Deserialize)]
-struct SoundboardSound {
-    id: String,
-    name: String,
+pub struct SoundboardSound {
+    pub name: String,
+    pub sound_id: String,
+    pub volume: f32,
+}
+
+#[derive(Debug, Deserialize)]
+struct SoundboardResponse {
+    items: Vec<SoundboardSound>,
 }
 
 pub struct DiscordClient {
@@ -44,7 +50,7 @@ impl DiscordClient {
         guild_id: &str,
     ) -> Result<()> {
         // Get guild sounds
-        info!("Fetching soundboard sounds for guild {}", guild_id);
+        debug!("Fetching soundboard sounds for guild {}", guild_id);
         let sounds = self.get_guild_sounds(guild_id).await?;
 
         if sounds.is_empty() {
@@ -52,20 +58,18 @@ impl DiscordClient {
             return Ok(());
         }
 
-        info!("Found {} soundboard sounds", sounds.len());
+        debug!("Found {} soundboard sounds", sounds.len());
 
         // Create temporary directory for processing
         let temp_dir = tempdir()?;
 
         for sound in sounds {
-            info!("Processing sound: {}", sound.name);
+            debug!("Processing sound: {}", sound.name);
 
             // Download sound
-            let sound_bytes = self.get_soundboard_sound(guild_id, &sound.id).await?;
-
-            // Save to temp file
-            let temp_path = temp_dir.path().join(format!("{}.mp3", sound.name));
-            fs::write(&temp_path, sound_bytes).await?;
+            let temp_path = self
+                .download_soundboard_sound(&sound, temp_dir.path())
+                .await?;
 
             // Normalize the sound
             match self
@@ -83,24 +87,18 @@ impl DiscordClient {
     async fn normalize_and_upload_sound(
         &self,
         normalizer: &AudioNormalizer,
-        input_path: &PathBuf,
+        input_path: &Path,
         guild_id: &str,
         sound_name: &str,
     ) -> Result<()> {
         // Normalize the sound
-        normalizer.normalize_file(input_path)?;
-
-        // Get the normalized file path
-        let normalized_path = input_path.with_file_name(format!(
-            "{}-normalized.wav",
-            input_path.file_stem().unwrap().to_string_lossy()
-        ));
+        let normalized_path = normalizer.normalize_file(input_path)?;
 
         // Read the normalized file
         let normalized_bytes = fs::read(&normalized_path).await?;
 
-        // Upload the normalized sound
-        self.create_soundboard_sound(guild_id, sound_name, &normalized_bytes, "audio/wav")
+        // Update content type to ogg
+        self.create_soundboard_sound(guild_id, sound_name, &normalized_bytes, "audio/ogg")
             .await?;
 
         Ok(())
@@ -108,16 +106,15 @@ impl DiscordClient {
 
     async fn get_guild_sounds(&self, guild_id: &str) -> Result<Vec<SoundboardSound>> {
         let url = format!("{}/guilds/{}/soundboard-sounds", self.base_url, guild_id);
-        let sounds: Vec<SoundboardSound> = self.client.get(&url).send().await?.json().await?;
-        Ok(sounds)
+        let response: SoundboardResponse = self.client.get(&url).send().await?.json().await?;
+        Ok(response.items)
     }
 
-    async fn get_soundboard_sound(&self, guild_id: &str, sound_id: &str) -> Result<Vec<u8>> {
-        let url = format!(
-            "{}/guilds/{}/soundboard-sounds/{}",
-            self.base_url, guild_id, sound_id
-        );
+    async fn get_soundboard_sound(&self, sound_id: &str) -> Result<Vec<u8>> {
+        let url = format!("https://cdn.discordapp.com/soundboard-sounds/{}", sound_id);
         let bytes = self.client.get(&url).send().await?.bytes().await?.to_vec();
+
+        debug!("Getting sound bytes from {}", url);
         Ok(bytes)
     }
 
@@ -139,5 +136,29 @@ impl DiscordClient {
 
         self.client.post(&url).multipart(form).send().await?;
         Ok(())
+    }
+
+    pub async fn list_guild_sounds(&self, guild_id: &str) -> Result<Vec<SoundboardSound>> {
+        let url = format!("{}/guilds/{}/soundboard-sounds", self.base_url, guild_id);
+        let response = self.client.get(&url).send().await?;
+
+        let sounds: SoundboardResponse = response.json().await?;
+        Ok(sounds.items)
+    }
+
+    pub async fn download_soundboard_sound(
+        &self,
+        sound: &SoundboardSound,
+        output_dir: &Path,
+    ) -> Result<PathBuf> {
+        debug!("Downloading sound: {}", sound.name);
+        let sound_bytes = self.get_soundboard_sound(&sound.sound_id).await?;
+
+        // Change extension to .ogg since Discord serves Ogg files
+        let output_path = output_dir.join(format!("{}.ogg", sound.name));
+        fs::write(&output_path, sound_bytes).await?;
+
+        info!("Downloaded: {}", output_path.display());
+        Ok(output_path)
     }
 }
