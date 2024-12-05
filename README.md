@@ -1,7 +1,6 @@
-# Discord Soundboard Normalizer 🎚️
+# Earpeace 🎚️
 
-A simple Discord bot that automatically normalizes the volume of soundboard clips to prevent unexpected volume spikes and ensure a consistent listening experience.
-
+A simple Discord bot that automatically normalizes the volume of soundboard clips to prevent unexpected volume spikes.
 ## Features
 
 - 🔊 Automatically normalizes audio clips uploaded to a Discord soundboard
