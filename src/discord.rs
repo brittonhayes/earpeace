@@ -1,4 +1,5 @@
 use anyhow::Result;
+use base64::{engine::general_purpose::STANDARD as base64, Engine};
 use log::{debug, info, warn};
 use reqwest::{
     header::{HeaderMap, HeaderValue, AUTHORIZATION},
@@ -16,6 +17,10 @@ pub struct SoundboardSound {
     pub name: String,
     pub sound_id: String,
     pub volume: f32,
+    pub emoji_id: Option<String>,
+    pub emoji_name: Option<String>,
+    pub available: Option<bool>,
+    pub override_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -76,7 +81,7 @@ impl DiscordClient {
                 .normalize_and_upload_sound(normalizer, &temp_path, guild_id, &sound.name)
                 .await
             {
-                Ok(_) => info!("Successfully processed sound: {}", sound.name),
+                Ok(_) => info!("Successfully processed and uploaded sound: {}", sound.name),
                 Err(e) => warn!("Failed to process sound {}: {}", sound.name, e),
             }
         }
@@ -91,15 +96,45 @@ impl DiscordClient {
         guild_id: &str,
         sound_name: &str,
     ) -> Result<()> {
-        // Normalize the sound
-        let normalized_path = normalizer.normalize_file(input_path)?;
+        // First get the existing sound to get all its properties
+        let sounds = self.get_guild_sounds(guild_id).await?;
+        let existing_sound = sounds.iter().find(|s| s.name == sound_name);
 
-        // Read the normalized file
+        let normalized_path = normalizer.normalize_file(input_path)?;
         let normalized_bytes = fs::read(&normalized_path).await?;
 
-        // Update content type to ogg
-        self.create_soundboard_sound(guild_id, sound_name, &normalized_bytes, "audio/ogg")
-            .await?;
+        // Discord expects MP3 files
+        match existing_sound {
+            Some(sound) => {
+                let original_sound_id = sound.sound_id.clone();
+                
+                // Upload the new normalized version
+                self.create_soundboard_sound(
+                    guild_id,
+                    &original_sound_id,
+                    &sound.name,
+                    &normalized_bytes,
+                    "audio/mp3",
+                )
+                .await?;
+
+                // After successful upload, delete the original
+                self.delete_soundboard_sound(guild_id, &original_sound_id).await?;
+                
+                debug!("Replaced sound: {} in guild {}", sound_name, guild_id);
+            }
+            None => {
+                warn!("Could not find existing sound {}, creating new one", sound_name);
+                self.create_soundboard_sound(
+                    guild_id,
+                    sound_name,
+                    sound_name,
+                    &normalized_bytes,
+                    "audio/mp3",
+                )
+                .await?;
+            }
+        }
 
         Ok(())
     }
@@ -121,20 +156,48 @@ impl DiscordClient {
     async fn create_soundboard_sound(
         &self,
         guild_id: &str,
+        sound_id: &str,
         name: &str,
         file_data: &[u8],
         content_type: &str,
     ) -> Result<()> {
         let url = format!("{}/guilds/{}/soundboard-sounds", self.base_url, guild_id);
 
-        let form = reqwest::multipart::Form::new()
-            .text("name", name.to_string())
-            .part(
-                "sound",
-                reqwest::multipart::Part::bytes(file_data.to_vec()).mime_str(content_type)?,
-            );
+        // Get existing sound to preserve emoji data
+        let sounds = self.get_guild_sounds(guild_id).await?;
+        let existing_sound = sounds.iter().find(|s| s.sound_id == sound_id);
 
-        self.client.post(&url).multipart(form).send().await?;
+        // Encode the file data as base64
+        let encoded = base64.encode(file_data);
+        let sound_data = format!("data:{};base64,{}", content_type, encoded);
+
+        // Create the JSON payload with all original parameters including emojis
+        let payload = if let Some(sound) = existing_sound {
+            serde_json::json!({
+                "name": name,
+                "sound_id": sound_id,
+                "volume": 1.0,
+                "sound": sound_data,
+                "emoji_id": sound.emoji_id,
+                "emoji_name": sound.emoji_name,
+            })
+        } else {
+            serde_json::json!({
+                "name": name,
+                "sound_id": sound_id,
+                "volume": 1.0,
+                "sound": sound_data,
+            })
+        };
+
+        let response = self.client.post(&url).json(&payload).send().await?;
+
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!(
+                "Failed to create soundboard sound: {}",
+                response.text().await?
+            ));
+        }
         Ok(())
     }
 
@@ -160,5 +223,23 @@ impl DiscordClient {
 
         info!("Downloaded: {}", output_path.display());
         Ok(output_path)
+    }
+
+    // Add new method to delete a sound
+    async fn delete_soundboard_sound(&self, guild_id: &str, sound_id: &str) -> Result<()> {
+        let url = format!(
+            "{}/guilds/{}/soundboard-sounds/{}",
+            self.base_url, guild_id, sound_id
+        );
+        
+        let response = self.client.delete(&url).send().await?;
+        
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!(
+                "Failed to delete soundboard sound: {}",
+                response.text().await?
+            ));
+        }
+        Ok(())
     }
 }

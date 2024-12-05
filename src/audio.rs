@@ -7,8 +7,6 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     process::Command,
-    thread,
-    time::Duration,
 };
 use symphonia::{
     core::{
@@ -22,7 +20,6 @@ use symphonia::{
 
 // Constants
 const I16_RANGE: (f32, f32) = (-32768.0, 32767.0);
-const FILE_WRITE_DELAY: Duration = Duration::from_millis(100);
 
 #[derive(Debug)]
 pub struct AudioNormalizer {
@@ -65,7 +62,6 @@ impl AudioNormalizer {
 
         let temp_mp3 = input_path.with_extension("mp3");
         AudioConverter::convert_opus_to_mp3(input_path, &temp_mp3)?;
-        thread::sleep(FILE_WRITE_DELAY);
 
         if !temp_mp3.exists() {
             return Err(anyhow::anyhow!(

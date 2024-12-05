@@ -1,0 +1,6 @@
+before:
+  hooks:
+    - rustup default stable
+    - cargo install --locked cargo-zigbuild
+builds:
+  - builder: rust

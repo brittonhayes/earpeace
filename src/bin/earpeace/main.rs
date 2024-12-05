@@ -7,8 +7,8 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
-mod audio;
-mod discord;
+use earpeace::audio;
+use earpeace::discord;
 
 #[derive(Parser)]
 #[command(
@@ -41,11 +41,11 @@ enum Commands {
         input_dir: Option<String>,
 
         /// Target loudness in LUFS (default: -18)
-        #[arg(short, long, default_value = "-18.0")]
+        #[arg(short = 't', long = "target-loudness", default_value = "-18.0", allow_negative_numbers = true)]
         target_loudness: f64,
 
         /// Target peak output in dB (default: -1)
-        #[arg(short, long, default_value = "-1.0")]
+        #[arg(short = 'p', long = "peak-ceiling", default_value = "-1.0", allow_negative_numbers = true)]
         peak_ceiling: f64,
     },
     /// List all sounds in the Discord soundboard
