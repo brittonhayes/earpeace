@@ -20,14 +20,21 @@ Discord soundboards are fun, but volume inconsistency between clips can be prett
 2. Create a `.env` file with your Discord bot token:
 ```
 DISCORD_TOKEN=your_token_here
+GUILD_ID=your_guild_id
 ```
 3. Run the bot:
 ```bash
 # Normalize all clips in the ./clips directory
 earpeace --input-dir ./clips
 
-# Normalize all soundboard clips in the specified guild
-earpeace --discord-token your_token_here --guild-id your_guild_id
+# List all the soundboard clips in your discord server
+earpeace ls
+
+# Normalize all soundboard clips to the default loudness
+earpeace normalize
+
+# Normalize all soundboard clips to the custom loudness
+earpeace normalize --target-loudness "-16.0" --peak-ceiling "-3.0"
 ```
 
 ## Usage
