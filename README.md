@@ -78,17 +78,6 @@ Options:
           Print help
 ```
 
-### Example Output
-```
-[2024-11-30T02:31:31Z INFO  earpeace] 🎧 EarPeace starting up...
-[2024-11-30T02:31:31Z INFO  earpeace] Target loudness: -18 LUFS
-[2024-11-30T02:31:31Z INFO  earpeace] Peak ceiling: -1 dB
-[2024-11-30T02:31:31Z INFO  earpeace] Processing file: .\samples\clap.mp3
-[2024-11-30T02:31:32Z INFO  earpeace] Processing file: .\samples\explosion.mp3
-[2024-11-30T02:31:33Z INFO  earpeace] Processing file: .\samples\song.wav
-[2024-11-30T02:31:35Z INFO  earpeace] Normalization complete!
-```
-
 ## Configuration
 
 Both the CLI tool and Discord bot use these default settings:
