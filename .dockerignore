@@ -1,5 +1,5 @@
 target/
 .git/
-.env
 .gitignore
-README.md 
+.env
+*.md 
