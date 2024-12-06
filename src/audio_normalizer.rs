@@ -30,7 +30,7 @@ pub struct AudioNormalizer {
     peak_ceiling: f64,
 }
 
-const MAX_TARGET_LOUDNESS: f64 = -10.0;
+const MAX_TARGET_LOUDNESS: f64 = -15.0;
 const MAX_PEAK_CEILING: f64 = -0.1;
 
 impl AudioNormalizer {
@@ -356,7 +356,7 @@ mod tests {
 
     #[test]
     fn test_process_audio_stream() -> Result<()> {
-        let normalizer = AudioNormalizer::new(-14.0, -1.0)?;
+        let normalizer = AudioNormalizer::new(-15.0, -1.0)?;
 
         let wav_path = Path::new("./samples/test.wav");
 
@@ -372,7 +372,7 @@ mod tests {
 
     #[test]
     fn test_normalization_gain_achieves_target() -> Result<()> {
-        let target_loudness = -14.0;
+        let target_loudness = -15.0;
         let normalizer = AudioNormalizer::new(target_loudness, -1.0)?;
 
         let wav_path = Path::new("./samples/test.wav");
@@ -406,7 +406,7 @@ mod tests {
 
     #[test]
     fn test_decode_to_samples() -> Result<()> {
-        let normalizer = AudioNormalizer::new(-14.0, -1.0)?;
+        let normalizer = AudioNormalizer::new(-15.0, -1.0)?;
 
         // Use a real WAV file from samples directory
         let wav_path = Path::new("samples/test.wav");
@@ -457,15 +457,13 @@ mod tests {
 
     #[test]
     fn test_opus_processing() -> Result<()> {
-        let normalizer = AudioNormalizer::new(-14.0, -1.0)?;
+        let normalizer = AudioNormalizer::new(-15.0, -1.0)?;
 
         let opus_path = Path::new("./samples/test.opus");
 
         // Add file existence check
         if !opus_path.exists() {
-            return Ok(()); // Skip test if file doesn't exist
-                           // Or alternatively:
-                           // return Err(anyhow::anyhow!("Test file not found: {}", opus_path.display()));
+            return Ok(());
         }
 
         // Test Opus file reading
@@ -550,7 +548,7 @@ mod tests {
         }
 
         // Test exceeding max peak ceiling
-        let result = AudioNormalizer::new(-14.0, 0.0);
+        let result = AudioNormalizer::new(-15.0, 0.0);
         assert!(
             result.is_err(),
             "Should error when peak ceiling > -0.1 dBFS"
@@ -563,7 +561,7 @@ mod tests {
         }
 
         // Test valid parameters
-        let result = AudioNormalizer::new(-14.0, -1.0);
+        let result = AudioNormalizer::new(-15.0, -1.0);
         assert!(result.is_ok(), "Should accept valid parameters");
 
         Ok(())
@@ -590,7 +588,7 @@ mod tests {
         assert!(result.is_err(), "Should error when target loudness is zero");
 
         // Test positive peak ceiling
-        let result = AudioNormalizer::new(-14.0, 1.0);
+        let result = AudioNormalizer::new(-15.0, 1.0);
         assert!(
             result.is_err(),
             "Should error when peak ceiling is positive"
@@ -603,11 +601,11 @@ mod tests {
         }
 
         // Test zero peak ceiling
-        let result = AudioNormalizer::new(-14.0, 0.0);
+        let result = AudioNormalizer::new(-15.0, 0.0);
         assert!(result.is_err(), "Should error when peak ceiling is zero");
 
         // Test valid negative values
-        let result = AudioNormalizer::new(-14.0, -1.0);
+        let result = AudioNormalizer::new(-15.0, -1.0);
         assert!(result.is_ok(), "Should accept valid negative parameters");
 
         Ok(())
