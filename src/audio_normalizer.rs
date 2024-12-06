@@ -1,3 +1,4 @@
+use crate::audio_converter::AudioConverter;
 use anyhow::{Context, Result};
 use ebur128::{EbuR128, Mode};
 use log::debug;
@@ -6,7 +7,6 @@ use std::{
     fs::File,
     io::Write,
     path::{Path, PathBuf},
-    process::Command,
 };
 use symphonia::{
     core::{
@@ -21,18 +21,59 @@ use symphonia::{
 // Constants
 const I16_RANGE: (f32, f32) = (-32768.0, 32767.0);
 
+pub const DEFAULT_TARGET_LOUDNESS: f64 = -18.0;
+pub const DEFAULT_PEAK_CEILING: f64 = -1.0;
+
 #[derive(Debug)]
 pub struct AudioNormalizer {
     target_loudness: f64,
     peak_ceiling: f64,
 }
 
+const MAX_TARGET_LOUDNESS: f64 = -10.0;
+const MAX_PEAK_CEILING: f64 = -0.1;
+
 impl AudioNormalizer {
-    pub fn new(target_loudness: f64, peak_ceiling: f64) -> Self {
-        Self {
+    pub const DEFAULT_TARGET_LOUDNESS: f64 = -18.0;
+    pub const DEFAULT_PEAK_CEILING: f64 = -1.0;
+
+    pub fn new(target_loudness: f64, peak_ceiling: f64) -> Result<Self> {
+        // Ensure values are negative
+        if target_loudness >= 0.0 {
+            return Err(anyhow::anyhow!(
+                "Target loudness must be negative (got: {} LUFS)",
+                target_loudness
+            ));
+        }
+
+        if peak_ceiling >= 0.0 {
+            return Err(anyhow::anyhow!(
+                "Peak ceiling must be negative (got: {} dBFS)",
+                peak_ceiling
+            ));
+        }
+
+        // Check maximum allowed values
+        if target_loudness > MAX_TARGET_LOUDNESS {
+            return Err(anyhow::anyhow!(
+                "Target loudness `{}` LUFS exceeds maximum allowed value of `{}`",
+                target_loudness,
+                MAX_TARGET_LOUDNESS
+            ));
+        }
+
+        if peak_ceiling > MAX_PEAK_CEILING {
+            return Err(anyhow::anyhow!(
+                "Peak ceiling `{}` dBFS exceeds maximum allowed value of `{}`",
+                peak_ceiling,
+                MAX_PEAK_CEILING
+            ));
+        }
+
+        Ok(Self {
             target_loudness,
             peak_ceiling,
-        }
+        })
     }
 
     pub fn normalize_file(&self, input_path: &Path) -> Result<PathBuf> {
@@ -84,18 +125,40 @@ impl AudioNormalizer {
         ))
     }
 
+    /// Calculate the gain needed to normalize the audio to the target loudness
     fn calculate_normalization_gain(&self, track: &Track, samples: &[f32]) -> Result<f64> {
         let channels = track.codec_params.channels.unwrap().count();
         let sample_rate = track.codec_params.sample_rate.unwrap();
         self.measure_loudness(channels, sample_rate, samples)
     }
 
+    /// Apply the calculated gain to the audio samples
+    ///
+    /// This function also limits the gain to the peak ceiling if it is exceeded
     fn apply_gain(&self, samples: &[f32], gain: f64) -> Result<Vec<f32>> {
-        // Apply peak ceiling limit to gain
-        let peak_gain = 10f64.powf(self.peak_ceiling / 20.0);
-        let final_gain = gain.min(peak_gain);
+        // Convert peak ceiling from dB to linear scale
+        let peak_limit = 10f64.powf(self.peak_ceiling / 20.0);
 
-        // Apply normalization with peak ceiling
+        // Find the maximum peak in the input
+        let current_peak = samples
+            .iter()
+            .map(|&s| s.abs() as f64)
+            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap_or(0.0);
+
+        // Calculate the maximum allowed gain to stay under peak ceiling
+        let max_gain = peak_limit / current_peak;
+
+        // Use the smaller of the calculated gain and max allowed gain
+        let final_gain = gain.min(max_gain);
+
+        debug!(
+            "Applying gain: {:.2} dB (limited from {:.2} dB due to peak ceiling)",
+            20.0 * final_gain.log10(),
+            20.0 * gain.log10()
+        );
+
+        // Apply the gain to all samples
         let normalized_samples = samples
             .iter()
             .map(|&s| (s as f64 * final_gain) as f32)
@@ -104,6 +167,7 @@ impl AudioNormalizer {
         Ok(normalized_samples)
     }
 
+    /// Measure the loudness of the audio samples
     fn measure_loudness(&self, channels: usize, sample_rate: u32, samples: &[f32]) -> Result<f64> {
         let mut ebu = EbuR128::new(channels as u32, sample_rate, Mode::I | Mode::TRUE_PEAK)
             .context("Failed to create EBU R128 analyzer")?;
@@ -119,30 +183,28 @@ impl AudioNormalizer {
             return Err(anyhow::anyhow!("Invalid loudness value calculated"));
         }
 
-        let gain_adjustment = if current_loudness < self.target_loudness {
-            // Current is quieter than target, increase gain
-            debug!(
-                "Current loudness {:.1} LUFS is quieter than target {:.1} LUFS, increasing gain",
-                current_loudness, self.target_loudness
-            );
-            self.target_loudness - current_loudness
-        } else {
-            // Current is louder than target, decrease gain
-            debug!(
-                "Current loudness {:.1} LUFS is louder than target {:.1} LUFS, decreasing gain",
-                current_loudness, self.target_loudness
-            );
-            self.target_loudness - current_loudness
-        };
+        debug!(
+            "Current loudness: {:.1} LUFS, Target: {:.1} LUFS",
+            current_loudness, self.target_loudness
+        );
 
-        let linear_gain = 10f64.powf(gain_adjustment / 20.0);
+        // Calculate gain needed to reach target loudness
+        let gain_db = self.target_loudness - current_loudness;
+        let linear_gain = 10f64.powf(gain_db / 20.0);
+
         if !linear_gain.is_finite() {
             return Err(anyhow::anyhow!("Invalid gain value calculated"));
         }
 
+        debug!(
+            "Calculated gain: {:.2} dB (linear: {:.4})",
+            gain_db, linear_gain
+        );
+
         Ok(linear_gain)
     }
 
+    /// Decode the audio stream to samples
     fn decode_to_samples(
         &self,
         format: &mut Box<dyn symphonia::core::formats::FormatReader>,
@@ -191,6 +253,7 @@ impl AudioNormalizer {
         Ok(samples)
     }
 
+    /// Write the normalized samples to an MP3 file
     fn write_mp3(
         &self,
         output_path: &Path,
@@ -205,7 +268,7 @@ impl AudioNormalizer {
         let _ = encoder.set_num_channels(channels as u8);
         let _ = encoder.set_sample_rate(sample_rate);
         let _ = encoder.set_brate(Bitrate::Kbps192);
-        let _ = encoder.set_quality(Quality::Good);
+        let _ = encoder.set_quality(Quality::Best);
 
         let mut encoder = encoder.build().unwrap();
 
@@ -258,6 +321,7 @@ impl AudioNormalizer {
         Ok(())
     }
 
+    /// Process the audio stream to get samples and track info
     fn process_audio_stream(&self, input_path: &Path) -> Result<(Vec<f32>, Track)> {
         // First get the track info
         let file = File::open(input_path)?;
@@ -286,47 +350,14 @@ impl AudioNormalizer {
     }
 }
 
-pub struct AudioConverter;
-
-impl AudioConverter {
-    pub fn convert_opus_to_mp3(input_path: &Path, output_path: &Path) -> Result<()> {
-        debug!(
-            "Converting Opus to MP3: {} -> {}",
-            input_path.display(),
-            output_path.display()
-        );
-
-        let status = Command::new("ffmpeg")
-            .args([
-                "-i",
-                &input_path.to_string_lossy(),
-                "-c:a",
-                "libmp3lame",
-                "-q:a",
-                "2",
-                "-y",
-                &output_path.to_string_lossy(),
-                "-loglevel",
-                "quiet", // Suppress ffmpeg output
-            ])
-            .status()
-            .context("Failed to execute ffmpeg")?;
-
-        if !status.success() {
-            return Err(anyhow::anyhow!("ffmpeg conversion failed"));
-        }
-
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_process_audio_stream() -> Result<()> {
-        let normalizer = AudioNormalizer::new(-14.0, -1.0);
+        let normalizer = AudioNormalizer::new(-14.0, -1.0)?;
+
         let wav_path = Path::new("./samples/test.wav");
 
         // Test WAV file reading
@@ -342,7 +373,8 @@ mod tests {
     #[test]
     fn test_normalization_gain_achieves_target() -> Result<()> {
         let target_loudness = -14.0;
-        let normalizer = AudioNormalizer::new(target_loudness, -1.0);
+        let normalizer = AudioNormalizer::new(target_loudness, -1.0)?;
+
         let wav_path = Path::new("./samples/test.wav");
 
         // Read the test file
@@ -374,7 +406,7 @@ mod tests {
 
     #[test]
     fn test_decode_to_samples() -> Result<()> {
-        let normalizer = AudioNormalizer::new(-14.0, -1.0);
+        let normalizer = AudioNormalizer::new(-14.0, -1.0)?;
 
         // Use a real WAV file from samples directory
         let wav_path = Path::new("samples/test.wav");
@@ -425,7 +457,8 @@ mod tests {
 
     #[test]
     fn test_opus_processing() -> Result<()> {
-        let normalizer = AudioNormalizer::new(-14.0, -1.0);
+        let normalizer = AudioNormalizer::new(-14.0, -1.0)?;
+
         let opus_path = Path::new("./samples/test.opus");
 
         // Add file existence check
@@ -497,6 +530,85 @@ mod tests {
                 .any(|window| window == [0xFF, 0xFB] || window == [0xFF, 0xFA]),
             "MP3 file should contain valid MP3 frame headers"
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_invalid_parameters() -> Result<()> {
+        // Test exceeding max target loudness
+        let result = AudioNormalizer::new(-9.0, -1.0);
+        assert!(
+            result.is_err(),
+            "Should error when target loudness > -10.0 LUFS"
+        );
+        if let Err(e) = result {
+            assert!(
+                e.to_string().contains("Target loudness"),
+                "Error message should mention target loudness"
+            );
+        }
+
+        // Test exceeding max peak ceiling
+        let result = AudioNormalizer::new(-14.0, 0.0);
+        assert!(
+            result.is_err(),
+            "Should error when peak ceiling > -0.1 dBFS"
+        );
+        if let Err(e) = result {
+            assert!(
+                e.to_string().contains("Peak ceiling"),
+                "Error message should mention peak ceiling"
+            );
+        }
+
+        // Test valid parameters
+        let result = AudioNormalizer::new(-14.0, -1.0);
+        assert!(result.is_ok(), "Should accept valid parameters");
+
+        Ok(())
+    }
+
+    // Add new test for negative value requirements
+    #[test]
+    fn test_negative_value_requirements() -> Result<()> {
+        // Test positive target loudness
+        let result = AudioNormalizer::new(1.0, -1.0);
+        assert!(
+            result.is_err(),
+            "Should error when target loudness is positive"
+        );
+        if let Err(e) = result {
+            assert!(
+                e.to_string().contains("must be negative"),
+                "Error message should mention negative requirement"
+            );
+        }
+
+        // Test zero target loudness
+        let result = AudioNormalizer::new(0.0, -1.0);
+        assert!(result.is_err(), "Should error when target loudness is zero");
+
+        // Test positive peak ceiling
+        let result = AudioNormalizer::new(-14.0, 1.0);
+        assert!(
+            result.is_err(),
+            "Should error when peak ceiling is positive"
+        );
+        if let Err(e) = result {
+            assert!(
+                e.to_string().contains("must be negative"),
+                "Error message should mention negative requirement"
+            );
+        }
+
+        // Test zero peak ceiling
+        let result = AudioNormalizer::new(-14.0, 0.0);
+        assert!(result.is_err(), "Should error when peak ceiling is zero");
+
+        // Test valid negative values
+        let result = AudioNormalizer::new(-14.0, -1.0);
+        assert!(result.is_ok(), "Should accept valid negative parameters");
 
         Ok(())
     }

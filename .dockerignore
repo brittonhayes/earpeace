@@ -1,0 +1,5 @@
+target/
+.git/
+.env
+.gitignore
+README.md 

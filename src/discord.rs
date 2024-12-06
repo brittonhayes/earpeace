@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 use tokio::fs;
 
-use crate::audio::AudioNormalizer;
+use crate::audio_normalizer::AudioNormalizer;
 
 #[derive(Debug, Deserialize)]
 pub struct SoundboardSound {
@@ -107,7 +107,7 @@ impl DiscordClient {
         match existing_sound {
             Some(sound) => {
                 let original_sound_id = sound.sound_id.clone();
-                
+
                 // Upload the new normalized version
                 self.create_soundboard_sound(
                     guild_id,
@@ -119,12 +119,16 @@ impl DiscordClient {
                 .await?;
 
                 // After successful upload, delete the original
-                self.delete_soundboard_sound(guild_id, &original_sound_id).await?;
-                
+                self.delete_soundboard_sound(guild_id, &original_sound_id)
+                    .await?;
+
                 debug!("Replaced sound: {} in guild {}", sound_name, guild_id);
             }
             None => {
-                warn!("Could not find existing sound {}, creating new one", sound_name);
+                warn!(
+                    "Could not find existing sound {}, creating new one",
+                    sound_name
+                );
                 self.create_soundboard_sound(
                     guild_id,
                     sound_name,
@@ -231,9 +235,9 @@ impl DiscordClient {
             "{}/guilds/{}/soundboard-sounds/{}",
             self.base_url, guild_id, sound_id
         );
-        
+
         let response = self.client.delete(&url).send().await?;
-        
+
         if !response.status().is_success() {
             return Err(anyhow::anyhow!(
                 "Failed to delete soundboard sound: {}",

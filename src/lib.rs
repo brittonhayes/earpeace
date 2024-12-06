@@ -1,2 +1,3 @@
-pub mod audio;
-pub mod discord; 
+pub mod audio_converter;
+pub mod audio_normalizer;
+pub mod discord;

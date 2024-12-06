@@ -1,0 +1,39 @@
+name: Run Tests
+
+on:
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install ffmpeg
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache dependencies
+      uses: Swatinem/rust-cache@v2
+
+    - name: Create test audio files
+      run: |
+        mkdir -p samples
+        ffmpeg -f lavfi -i "sine=frequency=1000:duration=5" samples/test.wav
+        ffmpeg -f lavfi -i "sine=frequency=1000:duration=5" samples/test.ogg
+
+    - name: Run tests
+      run: cargo test -- --nocapture
+
+    - name: Run tests with all features
+      run: cargo test --all-features -- --nocapture 

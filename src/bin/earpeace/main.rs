@@ -7,8 +7,8 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
-use earpeace::audio;
-use earpeace::discord;
+use earpeace::audio_normalizer::AudioNormalizer;
+use earpeace::discord::DiscordClient;
 
 #[derive(Parser)]
 #[command(
@@ -41,11 +41,21 @@ enum Commands {
         input_dir: Option<String>,
 
         /// Target loudness in LUFS (default: -18)
-        #[arg(short = 't', long = "target-loudness", default_value = "-18.0", allow_negative_numbers = true)]
+        #[arg(
+            short = 't',
+            long = "target-loudness",
+            default_value = "-18.0",
+            allow_negative_numbers = true
+        )]
         target_loudness: f64,
 
         /// Target peak output in dB (default: -1)
-        #[arg(short = 'p', long = "peak-ceiling", default_value = "-1.0", allow_negative_numbers = true)]
+        #[arg(
+            short = 'p',
+            long = "peak-ceiling",
+            default_value = "-1.0",
+            allow_negative_numbers = true
+        )]
         peak_ceiling: f64,
     },
     /// List all sounds in the Discord soundboard
@@ -73,18 +83,18 @@ async fn main() -> Result<()> {
             peak_ceiling,
         } => match (input_dir, &cli.discord_token, &cli.guild_id) {
             (Some(dir), None, None) => {
-                let audio = audio::AudioNormalizer::new(*target_loudness, *peak_ceiling);
+                let audio = AudioNormalizer::new(*target_loudness, *peak_ceiling)?;
                 process_directory(&audio, dir)?;
             }
             (None, Some(token), Some(guild)) => {
-                let audio = audio::AudioNormalizer::new(*target_loudness, *peak_ceiling);
-                let discord_client = discord::DiscordClient::new(token)?;
+                let audio = AudioNormalizer::new(*target_loudness, *peak_ceiling)?;
+                let discord_client = DiscordClient::new(token)?;
                 discord_client.process_guild_sounds(&audio, guild).await?;
             }
             (None, token_opt, guild_opt) => {
                 let token = token_opt
                     .clone()
-                    .or_else(|| env::var("TOKEN").ok())
+                    .or_else(|| env::var("DISCORD_TOKEN").ok())
                     .ok_or_else(|| anyhow::anyhow!("Discord token not provided in CLI or .env"))?;
 
                 let guild = guild_opt
@@ -92,9 +102,8 @@ async fn main() -> Result<()> {
                     .or_else(|| env::var("GUILD_ID").ok())
                     .ok_or_else(|| anyhow::anyhow!("Guild ID not provided in CLI or .env"))?;
 
-                let discord_client = discord::DiscordClient::new(&token)?;
-
-                let audio = audio::AudioNormalizer::new(*target_loudness, *peak_ceiling);
+                let discord_client = DiscordClient::new(&token)?;
+                let audio = AudioNormalizer::new(*target_loudness, *peak_ceiling)?;
                 discord_client.process_guild_sounds(&audio, &guild).await?;
             }
             _ => {
@@ -105,7 +114,7 @@ async fn main() -> Result<()> {
         Commands::Ls => {
             let token = cli
                 .discord_token
-                .or_else(|| env::var("TOKEN").ok())
+                .or_else(|| env::var("DISCORD_TOKEN").ok())
                 .ok_or_else(|| anyhow::anyhow!("Discord token not provided in CLI or .env"))?;
 
             let guild = cli
@@ -113,7 +122,7 @@ async fn main() -> Result<()> {
                 .or_else(|| env::var("GUILD_ID").ok())
                 .ok_or_else(|| anyhow::anyhow!("Guild ID not provided in CLI or .env"))?;
 
-            let discord_client = discord::DiscordClient::new(&token)?;
+            let discord_client = DiscordClient::new(&token)?;
             let sounds = discord_client.list_guild_sounds(&guild).await?;
 
             println!("\n🎵 Discord Soundboard Sounds 🎵\n");
@@ -147,14 +156,14 @@ async fn main() -> Result<()> {
         Commands::Cp { output_dir } => {
             let token = cli
                 .discord_token
-                .or_else(|| env::var("TOKEN").ok())
+                .or_else(|| env::var("DISCORD_TOKEN").ok())
                 .ok_or_else(|| anyhow::anyhow!("Discord token not provided in CLI or .env"))?;
             let guild = cli
                 .guild_id
                 .or_else(|| env::var("GUILD_ID").ok())
                 .ok_or_else(|| anyhow::anyhow!("Guild ID not provided in CLI or .env"))?;
 
-            let discord_client = discord::DiscordClient::new(&token)?;
+            let discord_client = DiscordClient::new(&token)?;
             let sounds = discord_client.list_guild_sounds(&guild).await?;
             for sound in sounds {
                 discord_client
@@ -167,7 +176,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn process_directory(normalizer: &audio::AudioNormalizer, dir: &str) -> Result<()> {
+fn process_directory(normalizer: &AudioNormalizer, dir: &str) -> Result<()> {
     let dir_path = Path::new(dir);
     if !dir_path.is_dir() {
         return Err(anyhow::anyhow!("Provided path is not a directory"));

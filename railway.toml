@@ -1,0 +1,11 @@
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "./bot"
+restartPolicyType = "on-failure"
+restartPolicyMaxRetries = 10
+
+[env]
+RUST_LOG = "debug" 

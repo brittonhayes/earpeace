@@ -24,6 +24,7 @@ dotenv = "0.15"
 mp3lame-encoder = "0.2.0"
 base64 = "0.21"
 serde_json = "1.0.133"
+poise = "0.6.1"
 
 [dev-dependencies]
 tempfile = "3.8"
