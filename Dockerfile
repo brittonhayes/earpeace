@@ -18,12 +18,12 @@ COPY . .
 RUN cargo build --release --bin bot
 
 # Runtime stage
-FROM debian:bullseye-slim
+FROM debian:bookworm-slim
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     ca-certificates \
-    libssl1.1 \
+    libssl3 \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
