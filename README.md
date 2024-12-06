@@ -1,49 +1,64 @@
 # Earpeace 🎚️
 
-A simple Discord bot that automatically normalizes the volume of soundboard clips to prevent unexpected volume spikes.
+A tool that automatically normalizes the volume of audio clips. Available as both a CLI tool and a Discord bot.
 
 [![Add to Discord](https://img.shields.io/badge/Add%20to%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.com/oauth2/authorize?client_id=1312227542652026880)
 
 ## Features
 
-- 🔊 Automatically normalizes audio clips uploaded to a Discord soundboard
-- 🎯 Maintains consistent volume levels across all audio clips
+- 🔊 Automatically normalizes audio clips to consistent volume levels
+- 🎯 Works with Discord soundboards or local audio files
 - ⚡ Low latency processing
-- 🛠️ Easy setup and configuration
+- 🛠️ Available as both a CLI tool and Discord bot
 - 📊 Configurable target loudness and peak ceiling
-- 🔄 Supports both Discord bot and local file processing modes
+- 🔄 Supports multiple audio formats (mp3, wav, ogg)
 
 ## Why?
 
-Discord soundboards are fun, but volume inconsistency between clips can be pretty jarring. This bot ensures all clips are uploaded at a comfortable, consistent volume level - no more unexpectedly loud clips!
+Audio clips often have inconsistent volume levels, which can be jarring when played back. Earpeace ensures all clips are normalized to a comfortable, consistent volume level - no more unexpectedly loud sounds!
 
-## Setup
+## Discord Bot
 
-1. Clone this repository
-2. Create a `.env` file with your Discord bot token:
-```
-DISCORD_TOKEN=your_token_here
-GUILD_ID=your_guild_id
-```
-3. Run the bot:
+The Discord bot version automatically normalizes soundboard clips in your server.
+
+### Bot Commands
+- `/normalize [target-loudness]` - Normalize all soundboard clips (optional target loudness)
+
+![Discord Bot Interface](assets/discord-commands.png)
+
+## CLI Tool
+
+The command-line version lets you normalize local audio files or Discord soundboard clips.
+
+### Installation
 ```bash
-# Normalize all clips in the ./clips directory
-earpeace --input-dir ./clips
+cargo install earpeace
+```
 
-# List all the soundboard clips in your discord server
-earpeace ls
+### CLI Usage Examples
+```bash
+# Normalize local audio files
+earpeace normalize --input-dir ./clips
 
-# Normalize all soundboard clips to the default loudness
-earpeace normalize
+# List Discord soundboard clips
+earpeace --discord-token "your_token" --guild-id "your_guild" ls
 
-# Normalize all soundboard clips to the custom loudness
+# Normalize Discord soundboard clips
+earpeace --discord-token "your_token" --guild-id "your_guild" normalize
+
+# Customize normalization settings
 earpeace normalize --target-loudness "-16.0" --peak-ceiling "-3.0"
 ```
 
-## Usage
-
+### CLI Options
 ```bash
-earpeace.exe [OPTIONS]
+earpeace [OPTIONS] <COMMAND>
+
+Commands:
+  normalize    Normalize audio files
+  ls          List Discord soundboard sounds
+  cp          Copy sounds from Discord to local directory
+  help        Print help
 
 Options:
   -t, --target-loudness <TARGET_LOUDNESS>
@@ -63,7 +78,6 @@ Options:
 ```
 
 ### Example Output
-
 ```
 [2024-11-30T02:31:31Z INFO  earpeace] 🎧 EarPeace starting up...
 [2024-11-30T02:31:31Z INFO  earpeace] Target loudness: -18 LUFS
@@ -76,8 +90,14 @@ Options:
 
 ## Configuration
 
-The bot uses sensible defaults, but you can adjust the following settings either through command-line options or in your `.env` file:
+Both the CLI tool and Discord bot use these default settings:
 
-- Target Loudness: -18 LUFS (adjustable via `--target-loudness`)
-- Peak Ceiling: -1 dB (adjustable via `--peak-ceiling`)
-- Log Level: info (adjustable via `--log-level`)
+- Target Loudness: -18 LUFS
+- Peak Ceiling: -1 dB
+- Log Level: info
+
+For the CLI tool, these can be configured via command-line flags or environment variables in a `.env` file:
+```
+DISCORD_TOKEN=your_token_here
+GUILD_ID=your_guild_id
+```
