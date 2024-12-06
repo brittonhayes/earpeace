@@ -24,7 +24,8 @@ The Discord bot version automatically normalizes soundboard clips in your server
 ### Bot Commands
 - `/normalize [target-loudness]` - Normalize all soundboard clips (optional target loudness)
 
-![Discord Bot Interface](assets/discord-commands.png)
+![Discord Bot Interface](assets/image.png)
+![Discord Bot Options](assets/options.png)
 
 ## CLI Tool
 
