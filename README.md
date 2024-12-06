@@ -11,7 +11,6 @@ A tool that automatically normalizes the volume of audio clips. Available as bot
 - ⚡ Low latency processing
 - 🛠️ Available as both a CLI tool and Discord bot
 - 📊 Configurable target loudness and peak ceiling
-- 🔄 Supports multiple audio formats (mp3, wav, ogg)
 
 ## Why?
 
@@ -32,7 +31,12 @@ The Discord bot version automatically normalizes soundboard clips in your server
 The command-line version lets you normalize local audio files or Discord soundboard clips.
 
 ### Installation
+
 ```bash
+# Prerequisites
+# - FFmpeg must be installed and available in your PATH
+# - Rust toolchain
+
 cargo install earpeace
 ```
 
@@ -42,10 +46,10 @@ cargo install earpeace
 earpeace normalize --input-dir ./clips
 
 # List Discord soundboard clips
-earpeace --discord-token "your_token" --guild-id "your_guild" ls
+earpeace ls
 
 # Normalize Discord soundboard clips
-earpeace --discord-token "your_token" --guild-id "your_guild" normalize
+earpeace normalize
 
 # Customize normalization settings
 earpeace normalize --target-loudness "-16.0" --peak-ceiling "-3.0"
