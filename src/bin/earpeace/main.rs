@@ -208,7 +208,7 @@ fn set_log_level(level_str: &str) {
     };
 
     Builder::new()
-        .target(Target::Stderr)
+        .target(Target::Stdout)
         .filter_level(log_level)
         .init();
 }
