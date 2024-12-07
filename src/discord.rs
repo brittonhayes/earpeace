@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 use tokio::fs;
 
-use crate::audio_normalizer::AudioNormalizer;
+use crate::audio_converter::convert_opus_to_mp3;
+use crate::audio_file::is_opus_file;
+use crate::audio_normalizer::Normalizer;
 
 #[derive(Debug, Deserialize)]
 pub struct SoundboardSound {
@@ -51,7 +53,7 @@ impl DiscordClient {
 
     pub async fn process_guild_sounds(
         &self,
-        normalizer: &AudioNormalizer,
+        normalizer: &Normalizer,
         guild_id: &str,
     ) -> Result<()> {
         // Get guild sounds
@@ -76,6 +78,10 @@ impl DiscordClient {
                 .download_soundboard_sound(&sound, temp_dir.path())
                 .await?;
 
+            if is_opus_file(&temp_path) {
+                convert_opus_to_mp3(&temp_path, &temp_path)?;
+            }
+
             // Normalize the sound
             match self
                 .normalize_and_upload_sound(normalizer, &temp_path, guild_id, &sound.name)
@@ -91,7 +97,7 @@ impl DiscordClient {
 
     async fn normalize_and_upload_sound(
         &self,
-        normalizer: &AudioNormalizer,
+        normalizer: &Normalizer,
         input_path: &Path,
         guild_id: &str,
         sound_name: &str,

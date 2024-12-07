@@ -513,6 +513,7 @@ dependencies = [
  "symphonia-codec-vorbis",
  "symphonia-format-ogg",
  "tempfile",
+ "thiserror",
  "tokio",
 ]
 

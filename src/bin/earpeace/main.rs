@@ -7,7 +7,7 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
-use earpeace::audio_normalizer::AudioNormalizer;
+use earpeace::audio_normalizer::Normalizer;
 use earpeace::discord::DiscordClient;
 
 #[derive(Parser)]
@@ -83,11 +83,11 @@ async fn main() -> Result<()> {
             peak_ceiling,
         } => match (input_dir, &cli.discord_token, &cli.guild_id) {
             (Some(dir), None, None) => {
-                let audio = AudioNormalizer::new(*target_loudness, *peak_ceiling)?;
+                let audio = Normalizer::new(*target_loudness, *peak_ceiling)?;
                 process_directory(&audio, dir)?;
             }
             (None, Some(token), Some(guild)) => {
-                let audio = AudioNormalizer::new(*target_loudness, *peak_ceiling)?;
+                let audio = Normalizer::new(*target_loudness, *peak_ceiling)?;
                 let discord_client = DiscordClient::new(token)?;
                 discord_client.process_guild_sounds(&audio, guild).await?;
             }
@@ -103,7 +103,7 @@ async fn main() -> Result<()> {
                     .ok_or_else(|| anyhow::anyhow!("Guild ID not provided in CLI or .env"))?;
 
                 let discord_client = DiscordClient::new(&token)?;
-                let audio = AudioNormalizer::new(*target_loudness, *peak_ceiling)?;
+                let audio = Normalizer::new(*target_loudness, *peak_ceiling)?;
                 discord_client.process_guild_sounds(&audio, &guild).await?;
             }
             _ => {
@@ -176,7 +176,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn process_directory(normalizer: &AudioNormalizer, dir: &str) -> Result<()> {
+fn process_directory(normalizer: &Normalizer, dir: &str) -> Result<()> {
     let dir_path = Path::new(dir);
     if !dir_path.is_dir() {
         return Err(anyhow::anyhow!("Provided path is not a directory"));

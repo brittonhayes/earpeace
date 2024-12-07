@@ -2,7 +2,7 @@ use anyhow::Result;
 use poise::serenity_prelude as serenity;
 use std::sync::Arc;
 
-use earpeace::audio_normalizer::AudioNormalizer;
+use earpeace::audio_normalizer::Normalizer;
 use earpeace::discord::DiscordClient;
 // Type aliases for convenience
 type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -41,10 +41,10 @@ async fn normalize(
 
     let guild_id = ctx.guild_id().unwrap().to_string();
 
-    let target_loudness = target_loudness.unwrap_or(AudioNormalizer::DEFAULT_TARGET_LOUDNESS);
-    let peak_ceiling = AudioNormalizer::DEFAULT_PEAK_CEILING;
+    let target_loudness = target_loudness.unwrap_or(Normalizer::DEFAULT_TARGET_LOUDNESS);
+    let target_peak = Normalizer::DEFAULT_TARGET_PEAK;
 
-    let audio_normalizer = match AudioNormalizer::new(target_loudness, peak_ceiling) {
+    let audio_normalizer = match Normalizer::new(target_loudness, target_peak) {
         Ok(normalizer) => normalizer,
         Err(e) => {
             let error_message = format!("❌ Invalid options: {}", e);
