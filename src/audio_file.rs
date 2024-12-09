@@ -14,8 +14,6 @@ pub trait AudioFile {
 
 pub struct Mp3File;
 
-
-
 impl Default for Mp3File {
     fn default() -> Self {
         Self::new()
@@ -143,9 +141,4 @@ impl AudioFile for Mp3File {
 
         Self::encode_to_buffer(encoder, &left, &right)
     }
-}
-
-/// Check if the file extension is ".ogg"
-pub fn is_opus_file(path: &Path) -> bool {
-    path.extension().map_or(false, |ext| ext == "ogg")
 }

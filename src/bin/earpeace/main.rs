@@ -93,7 +93,10 @@ async fn main() -> Result<()> {
             (None, Some(token), Some(guild)) => {
                 let audio = Normalizer::new(*target_loudness, *peak_ceiling)?;
                 let discord_client = DiscordClient::new(token)?;
-                discord_client.process_guild_sounds(&audio, guild).await?;
+                let sounds = discord_client.get_guild_sounds(guild).await?;
+                discord_client
+                    .process_guild_sounds(&audio, sounds, guild)
+                    .await?;
             }
             (None, token_opt, guild_opt) => {
                 let token = token_opt
@@ -108,7 +111,10 @@ async fn main() -> Result<()> {
 
                 let discord_client = DiscordClient::new(&token)?;
                 let audio = Normalizer::new(*target_loudness, *peak_ceiling)?;
-                discord_client.process_guild_sounds(&audio, &guild).await?;
+                let sounds = discord_client.get_guild_sounds(&guild).await?;
+                discord_client
+                    .process_guild_sounds(&audio, sounds, &guild)
+                    .await?;
             }
             _ => {
                 info!("Please provide either an input directory (-i) or Discord credentials");

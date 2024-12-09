@@ -1,19 +1,10 @@
+use anyhow::Context;
 use log::debug;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use thiserror::Error;
-
-/// Errors that can occur during audio conversion
-#[derive(Error, Debug)]
-pub enum ConversionError {
-    #[error("FFmpeg command failed to execute: {0}")]
-    FFmpegExecutionError(#[from] std::io::Error),
-    #[error("FFmpeg conversion failed: {0}")]
-    FFmpegConversionError(String),
-}
 
 pub trait AudioConverter {
-    fn convert(&self, input_path: &Path, output_path: &Path) -> Result<PathBuf, ConversionError>;
+    fn convert(&self, input_path: &Path, output_path: &Path) -> Result<PathBuf, anyhow::Error>;
 }
 
 pub struct OpusFile;
@@ -31,7 +22,7 @@ impl OpusFile {
 }
 
 impl AudioConverter for OpusFile {
-    fn convert(&self, input_path: &Path, output_path: &Path) -> Result<PathBuf, ConversionError> {
+    fn convert(&self, input_path: &Path, output_path: &Path) -> Result<PathBuf, anyhow::Error> {
         // TODO: This is a temporary solution. We should use a Rust library to convert the audio file.
         debug!(
             "Converting Opus to MP3: {} -> {}",
@@ -39,20 +30,23 @@ impl AudioConverter for OpusFile {
             output_path.display()
         );
 
-        let output = Command::new("ffmpeg")
+        let status = Command::new("ffmpeg")
             .arg("-i")
             .arg(input_path)
             .arg("-c:a")
             .arg("libmp3lame")
             .arg("-q:a")
-            .arg("2")  // High quality VBR setting
-            .arg("-y")  // Overwrite output file if it exists
+            .arg("2") // High quality VBR setting
+            .arg("-y") // Overwrite output file if it exists
             .arg(output_path)
-            .output()?;
+            .status()
+            .context("FFmpeg command failed to execute")?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(ConversionError::FFmpegConversionError(stderr.to_string()));
+        if !status.success() {
+            return Err(anyhow::anyhow!(
+                "FFmpeg command failed to execute: {}",
+                input_path.display()
+            ));
         }
 
         Ok(output_path.to_path_buf())

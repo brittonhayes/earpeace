@@ -55,11 +55,17 @@ async fn normalize(
 
     ctx.say("Starting sound normalization process...").await?;
 
+    let sounds = ctx
+        .data()
+        .discord_client
+        .get_guild_sounds(&guild_id)
+        .await?;
+
     // Process all guild sounds
     match ctx
         .data()
         .discord_client
-        .process_guild_sounds(&audio_normalizer, &guild_id)
+        .process_guild_sounds(&audio_normalizer, sounds, &guild_id)
         .await
     {
         Ok(_) => {
