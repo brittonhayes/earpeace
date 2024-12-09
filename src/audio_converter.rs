@@ -8,8 +8,8 @@ use thiserror::Error;
 pub enum ConversionError {
     #[error("FFmpeg command failed to execute: {0}")]
     FFmpegExecutionError(#[from] std::io::Error),
-    #[error("FFmpeg conversion failed with non-zero exit status")]
-    FFmpegConversionError,
+    #[error("FFmpeg conversion failed: {0}")]
+    FFmpegConversionError(String),
 }
 
 pub trait AudioConverter {
@@ -39,23 +39,20 @@ impl AudioConverter for OpusFile {
             output_path.display()
         );
 
-        let status = Command::new("ffmpeg")
-            .args([
-                "-i",
-                &input_path.to_string_lossy(),
-                "-c:a",
-                "libmp3lame",
-                "-q:a",
-                "2",
-                "-y",
-                &output_path.to_string_lossy(),
-                "-loglevel",
-                "quiet",
-            ])
-            .status()?;
+        let output = Command::new("ffmpeg")
+            .arg("-i")
+            .arg(input_path)
+            .arg("-c:a")
+            .arg("libmp3lame")
+            .arg("-q:a")
+            .arg("2")  // High quality VBR setting
+            .arg("-y")  // Overwrite output file if it exists
+            .arg(output_path)
+            .output()?;
 
-        if !status.success() {
-            return Err(ConversionError::FFmpegConversionError);
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(ConversionError::FFmpegConversionError(stderr.to_string()));
         }
 
         Ok(output_path.to_path_buf())

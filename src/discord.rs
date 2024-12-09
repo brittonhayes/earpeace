@@ -82,7 +82,7 @@ impl DiscordClient {
 
             if is_opus_file(&temp_path) {
                 let opus_file = OpusFile::new();
-                opus_file.convert(&temp_path, &temp_path)?;
+                opus_file.convert(&temp_path, &temp_path.with_extension("mp3"))?;
             }
 
             // Normalize the sound
