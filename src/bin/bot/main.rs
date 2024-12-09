@@ -3,6 +3,7 @@ use poise::serenity_prelude as serenity;
 use std::sync::Arc;
 
 use earpeace::audio_normalizer::Normalizer;
+use earpeace::audio_limiter::Limiter;
 use earpeace::discord::DiscordClient;
 // Type aliases for convenience
 type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -81,6 +82,60 @@ async fn normalize(
     Ok(())
 }
 
+/// Apply a limiter to all soundboard sounds in the current guild
+#[poise::command(slash_command, guild_only)]
+async fn limit(
+    ctx: Context<'_>,
+    #[description = "Threshold in dB (default: -1.0)"] threshold: Option<f64>,
+    #[description = "Release time in ms (default: 50.0)"] release_time: Option<f64>,
+    #[description = "Lookahead time in ms (default: 5)"] lookahead: Option<usize>,
+) -> Result<(), Error> {
+    // Defer the response since this might take a while
+    ctx.defer().await?;
+
+    let guild_id = ctx.guild_id().unwrap().to_string();
+
+    let threshold = threshold.unwrap_or(Limiter::DEFAULT_THRESHOLD);
+    let release_time = release_time.unwrap_or(Limiter::DEFAULT_RELEASE_TIME);
+    let lookahead = lookahead.unwrap_or(Limiter::DEFAULT_LOOKAHEAD_MS);
+
+    let limiter = match Limiter::new(threshold, release_time, lookahead) {
+        Ok(limiter) => limiter,
+        Err(e) => {
+            let error_message = format!("❌ Invalid options: {}", e);
+            ctx.say(error_message).await?;
+            return Ok(());
+        }
+    };
+
+    ctx.say("Starting sound limiting process...").await?;
+
+    let sounds = ctx
+        .data()
+        .discord_client
+        .get_guild_sounds(&guild_id)
+        .await?;
+
+    // Process all guild sounds
+    match ctx
+        .data()
+        .discord_client
+        .process_guild_sounds(&limiter, sounds, &guild_id)
+        .await
+    {
+        Ok(_) => {
+            ctx.say("✅ Successfully limited all soundboard sounds!")
+                .await?;
+        }
+        Err(e) => {
+            ctx.say(format!("❌ Error limiting sounds: {}", e))
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() {
     // Initialize logging at debug level
@@ -101,7 +156,7 @@ async fn main() {
         Arc::new(DiscordClient::new(&token).expect("Failed to create Discord client"));
 
     let options = poise::FrameworkOptions {
-        commands: vec![normalize()],
+        commands: vec![normalize(), limit()],
         on_error: |error| Box::pin(on_error(error)),
         ..Default::default()
     };
