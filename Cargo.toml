@@ -26,6 +26,7 @@ base64 = "0.21"
 serde_json = "1.0.133"
 poise = "0.6.1"
 thiserror = "1.0"
+fundsp = "0.20.0"
 
 [dev-dependencies]
 tempfile = "3.8"

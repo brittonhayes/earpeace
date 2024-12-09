@@ -10,9 +10,15 @@ use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 use tokio::fs;
 
-use crate::audio_converter::convert_opus_to_mp3;
-use crate::audio_file::is_opus_file;
-use crate::audio_normalizer::Normalizer;
+use crate::{
+    audio_converter::{AudioConverter, OpusFile},
+    audio_file::AudioFile,
+    dsp::AudioProcessor,
+};
+use crate::{
+    audio_file::{is_opus_file, Mp3File},
+    dsp::decode_file,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct SoundboardSound {
@@ -53,19 +59,15 @@ impl DiscordClient {
 
     pub async fn process_guild_sounds(
         &self,
-        normalizer: &Normalizer,
+        processor: &dyn AudioProcessor,
         guild_id: &str,
     ) -> Result<()> {
         // Get guild sounds
-        debug!("Fetching soundboard sounds for guild {}", guild_id);
         let sounds = self.get_guild_sounds(guild_id).await?;
-
         if sounds.is_empty() {
             info!("No soundboard sounds found in guild");
             return Ok(());
         }
-
-        debug!("Found {} soundboard sounds", sounds.len());
 
         // Create temporary directory for processing
         let temp_dir = tempdir()?;
@@ -79,12 +81,13 @@ impl DiscordClient {
                 .await?;
 
             if is_opus_file(&temp_path) {
-                convert_opus_to_mp3(&temp_path, &temp_path)?;
+                let opus_file = OpusFile::new();
+                opus_file.convert(&temp_path, &temp_path)?;
             }
 
             // Normalize the sound
             match self
-                .normalize_and_upload_sound(normalizer, &temp_path, guild_id, &sound.name)
+                .process_and_upload_sound(processor, &temp_path, guild_id, &sound.name)
                 .await
             {
                 Ok(_) => info!("Successfully processed and uploaded sound: {}", sound.name),
@@ -95,9 +98,9 @@ impl DiscordClient {
         Ok(())
     }
 
-    async fn normalize_and_upload_sound(
+    async fn process_and_upload_sound(
         &self,
-        normalizer: &Normalizer,
+        normalizer: &dyn AudioProcessor,
         input_path: &Path,
         guild_id: &str,
         sound_name: &str,
@@ -106,8 +109,14 @@ impl DiscordClient {
         let sounds = self.get_guild_sounds(guild_id).await?;
         let existing_sound = sounds.iter().find(|s| s.name == sound_name);
 
-        let normalized_path = normalizer.normalize_file(input_path)?;
-        let normalized_bytes = fs::read(&normalized_path).await?;
+        let (samples, track) = decode_file(input_path)?;
+        let channels = track.codec_params.channels.unwrap().count();
+        let sample_rate = track.codec_params.sample_rate.unwrap();
+
+        let normalized_samples = normalizer.process(&samples, channels, sample_rate)?;
+
+        let mp3 = Mp3File::new();
+        let bytes = mp3.write_to_buffer(&normalized_samples, &track)?;
 
         // Discord expects MP3 files
         match existing_sound {
@@ -119,7 +128,7 @@ impl DiscordClient {
                     guild_id,
                     &original_sound_id,
                     &sound.name,
-                    &normalized_bytes,
+                    &bytes,
                     "audio/mp3",
                 )
                 .await?;
@@ -127,22 +136,14 @@ impl DiscordClient {
                 // After successful upload, delete the original
                 self.delete_soundboard_sound(guild_id, &original_sound_id)
                     .await?;
-
-                debug!("Replaced sound: {} in guild {}", sound_name, guild_id);
             }
             None => {
                 warn!(
                     "Could not find existing sound {}, creating new one",
                     sound_name
                 );
-                self.create_soundboard_sound(
-                    guild_id,
-                    sound_name,
-                    sound_name,
-                    &normalized_bytes,
-                    "audio/mp3",
-                )
-                .await?;
+                self.create_soundboard_sound(guild_id, sound_name, sound_name, &bytes, "audio/mp3")
+                    .await?;
             }
         }
 
@@ -151,7 +152,10 @@ impl DiscordClient {
 
     async fn get_guild_sounds(&self, guild_id: &str) -> Result<Vec<SoundboardSound>> {
         let url = format!("{}/guilds/{}/soundboard-sounds", self.base_url, guild_id);
+        debug!("Fetching soundboard sounds for guild {}", guild_id);
         let response: SoundboardResponse = self.client.get(&url).send().await?.json().await?;
+
+        debug!("Found {} soundboard sounds", response.items.len());
         Ok(response.items)
     }
 
@@ -250,6 +254,8 @@ impl DiscordClient {
                 response.text().await?
             ));
         }
+
+        debug!("Deleted sound: {} in guild {}", sound_id, guild_id);
         Ok(())
     }
 }

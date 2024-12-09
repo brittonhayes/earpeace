@@ -1,5 +1,5 @@
 use log::debug;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use thiserror::Error;
 
@@ -12,35 +12,48 @@ pub enum ConversionError {
     FFmpegConversionError,
 }
 
-/// Convert an Opus audio file to MP3 format using FFmpeg
-pub fn convert_opus_to_mp3(input_path: &Path, output_path: &Path) -> Result<(), ConversionError> {
-    // TODO: This is a temporary solution. We should use a Rust library to convert the audio file.
-    debug!(
-        "Converting Opus to MP3: {} -> {}",
-        input_path.display(),
-        output_path.display()
-    );
+pub trait AudioConverter {
+    fn convert(&self, input_path: &Path, output_path: &Path) -> Result<PathBuf, ConversionError>;
+}
 
-    let status = Command::new("ffmpeg")
-        .args([
-            "-i",
-            &input_path.to_string_lossy(),
-            "-c:a",
-            "libmp3lame",
-            "-q:a",
-            "2",
-            "-y",
-            &output_path.to_string_lossy(),
-            "-loglevel",
-            "quiet",
-        ])
-        .status()?;
+pub struct OpusFile;
 
-    if !status.success() {
-        return Err(ConversionError::FFmpegConversionError);
+impl OpusFile {
+    pub fn new() -> Self {
+        Self
     }
+}
 
-    Ok(())
+impl AudioConverter for OpusFile {
+    fn convert(&self, input_path: &Path, output_path: &Path) -> Result<PathBuf, ConversionError> {
+        // TODO: This is a temporary solution. We should use a Rust library to convert the audio file.
+        debug!(
+            "Converting Opus to MP3: {} -> {}",
+            input_path.display(),
+            output_path.display()
+        );
+
+        let status = Command::new("ffmpeg")
+            .args([
+                "-i",
+                &input_path.to_string_lossy(),
+                "-c:a",
+                "libmp3lame",
+                "-q:a",
+                "2",
+                "-y",
+                &output_path.to_string_lossy(),
+                "-loglevel",
+                "quiet",
+            ])
+            .status()?;
+
+        if !status.success() {
+            return Err(ConversionError::FFmpegConversionError);
+        }
+
+        Ok(output_path.to_path_buf())
+    }
 }
 
 #[cfg(test)]
@@ -53,7 +66,7 @@ mod tests {
         let input = PathBuf::from("nonexistent.opus");
         let output = PathBuf::from("output.mp3");
 
-        let result = convert_opus_to_mp3(&input, &output);
+        let result = OpusFile.convert(&input, &output);
         assert!(result.is_err());
     }
 
@@ -66,7 +79,7 @@ mod tests {
         let output_path = temp_dir.path().join("output-test.mp3");
 
         // Convert to MP3
-        convert_opus_to_mp3(test_opus, &output_path).unwrap();
+        OpusFile.convert(test_opus, &output_path).unwrap();
 
         // Verify the output file exists and has content
         assert!(output_path.exists(), "Output MP3 file should exist");

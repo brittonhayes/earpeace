@@ -1,6 +1,10 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use dotenv::dotenv;
+use earpeace::audio_file::AudioFile;
+use earpeace::audio_file::Mp3File;
+use earpeace::dsp::decode_file;
+use earpeace::dsp::AudioProcessor;
 use env_logger::{Builder, Target};
 use log::{info, LevelFilter};
 use std::env;
@@ -176,7 +180,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn process_directory(normalizer: &Normalizer, dir: &str) -> Result<()> {
+fn process_directory(processor: &dyn AudioProcessor, dir: &str) -> Result<()> {
     let dir_path = Path::new(dir);
     if !dir_path.is_dir() {
         return Err(anyhow::anyhow!("Provided path is not a directory"));
@@ -187,9 +191,16 @@ fn process_directory(normalizer: &Normalizer, dir: &str) -> Result<()> {
         let path = entry.path();
 
         if let Some(extension) = path.extension() {
-            if matches!(extension.to_str(), Some("mp3" | "wav" | "ogg")) {
+            if matches!(extension.to_str(), Some("mp3")) {
                 info!("Processing file: {}", path.display());
-                normalizer.normalize_file(&path)?;
+                let (samples, track) = decode_file(&path)?;
+                let channels = track.codec_params.channels.unwrap().count();
+                let sample_rate = track.codec_params.sample_rate.unwrap();
+
+                let normalized_samples = processor.process(&samples, channels, sample_rate)?;
+
+                let mp3 = Mp3File::new();
+                let _ = mp3.write(&normalized_samples, &track, &path)?;
             }
         }
     }
