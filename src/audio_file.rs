@@ -16,6 +16,12 @@ pub struct Mp3File;
 
 
 
+impl Default for Mp3File {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Mp3File {
     pub fn new() -> Self {
         Self

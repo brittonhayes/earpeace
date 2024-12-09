@@ -18,6 +18,12 @@ pub trait AudioConverter {
 
 pub struct OpusFile;
 
+impl Default for OpusFile {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OpusFile {
     pub fn new() -> Self {
         Self
